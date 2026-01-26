@@ -9,6 +9,7 @@ const yt = youtube({
 });
 // module.exports = yt;
 
+// Search Videos - TOO RESOURCE INTENSIVE - USE WITH CAUTION
 async function searchVideos(query) {
   const res = await yt.search.list({
     part: "snippet",
@@ -21,6 +22,8 @@ async function searchVideos(query) {
     console.log(v.snippet);
   });
 }
+// +++++++++++++++++++++++++++++++++++++++++++//
+
 function extractYouTubeVideoId(input) {
   if (!input || typeof input !== "string") return null;
 
@@ -61,8 +64,7 @@ function extractYouTubeVideoId(input) {
 
   return null;
 }
-
-const url = "https://youtu.be/9ao4FEaDGhQ?si=5DIj97Fpkzqc18_c";
+// const url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
 
 async function getVideoDetailsFromAnyUrl(input) {
   const videoId = extractYouTubeVideoId(input);
@@ -86,4 +88,101 @@ async function getVideoDetailsFromAnyUrl(input) {
 async function mainVideoSearch(url) {
   console.log(await getVideoDetailsFromAnyUrl(url));
 }
-mainVideoSearch(url);   
+// mainVideoSearch(url);
+
+// PLAYLIST ID EXTRACTION
+function extractYouTubePlaylistId(input) {
+  if (!input || typeof input !== "string") return null;
+
+  // 1. Raw playlist ID (most common prefixes)
+  if (/^(PL|OLAK5uy|UU|LL|FL|RD)[a-zA-Z0-9_-]+$/.test(input)) {
+    return input;
+  }
+
+  try {
+    const url = new URL(input);
+
+    // Standard ?list=PLAYLIST_ID
+    if (url.searchParams.has("list")) {
+      return url.searchParams.get("list");
+    }
+  } catch (e) {
+    return null;
+  }
+
+  return null;
+}
+
+async function getAllPlaylistVideos(input) {
+  const playlistId = extractYouTubePlaylistId(input);
+
+  if (!playlistId) {
+    throw new Error("Invalid playlist URL or ID");
+  }
+
+  let playlistItems = [];
+  let pageToken = null;
+
+  // 1️⃣ Fetch all playlist items
+  do {
+    const res = await yt.playlistItems.list({
+      part: "snippet,contentDetails",
+      playlistId,
+      maxResults: 50,
+      pageToken,
+    });
+
+    playlistItems.push(...res.data.items);
+    pageToken = res.data.nextPageToken;
+  } while (pageToken);
+
+  // 2️⃣ Extract video IDs
+  const videoIds = playlistItems.map(
+    item => item.contentDetails.videoId
+  );
+
+  // 3️⃣ Fetch video durations (batch: max 50)
+  const videoDetails = [];
+
+  for (let i = 0; i < videoIds.length; i += 50) {
+    const chunk = videoIds.slice(i, i + 50);
+
+    const res = await yt.videos.list({
+      part: "contentDetails",
+      id: chunk.join(","),
+    });
+
+    videoDetails.push(...res.data.items);
+  }
+
+  // 4️⃣ Map videoId → duration
+  const durationMap = new Map(
+    videoDetails.map(v => [v.id, v.contentDetails.duration])
+  );
+
+  // 5️⃣ Attach duration to playlist items
+  return playlistItems.map(item => ({
+    ...item,
+    contentDetails: {
+      ...item.contentDetails,
+      duration: durationMap.get(item.contentDetails.videoId) || null,
+    },
+  }));
+}
+
+const playlistUrl =
+  "https://youtube.com/playlist?list=PLC3y8-rFHvwgg3vaYJgHGnModB54rxOk3&si=CgZ7s0_OEeJ32nCb";
+
+async function mainPlaylistSearch(url) {
+  let videos = await getAllPlaylistVideos(url);
+  const result = videos.map((v) => ({
+    title: v.snippet.title,
+    duration: v.contentDetails.duration,
+    thumbnails: v.snippet.thumbnails.default.url,
+    videoId: v.contentDetails.videoId,
+    channel: v.snippet.channelTitle,
+  }));
+  console.table(result);
+}
+
+mainPlaylistSearch(playlistUrl);
